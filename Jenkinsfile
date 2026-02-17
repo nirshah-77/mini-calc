@@ -29,12 +29,12 @@ pipeline {
 
         stage('Push Docker Images') {
             steps {
-                script{
+                script {
                     docker.withRegistry('', 'DockerHubCred') {
-                    sh 'docker tag calculator nirshah77/calculator:latest'
-                    sh 'docker push nirshah77/calculator'
+                        sh 'docker tag calculator nirshah77/calculator:latest'
+                        sh 'docker push nirshah77/calculator:latest'
                     }
-                 }
+                }
             }
         }
 
