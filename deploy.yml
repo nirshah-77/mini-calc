@@ -6,7 +6,7 @@
   tasks:
     - name: Pull Docker Image
       docker_image:
-        name: "iiitb/calculator"
+        name: "nirshah77/calculator"
         source: pull
       register: docker_pull_result
 
