@@ -100,18 +100,13 @@ jobs:
         run: |
           ssh ubuntu@$SERVER_IP "curl -L https://omnitruck.chef.io/install.sh | sudo bash"
 
-      - name: Copy cookbook and Chef config to EC2
+      - name: Copy recipe to EC2
         run: |
-          ssh ubuntu@$SERVER_IP "sudo mkdir -p /var/chef/cookbooks"
-          # SCP everything to ubuntu home dir (always writable, even on re-runs)
-          scp -r chef/cookbooks/docker_setup ubuntu@$SERVER_IP:~/docker_setup
-          ssh ubuntu@$SERVER_IP "sudo rm -rf /var/chef/cookbooks/docker_setup && sudo mv ~/docker_setup /var/chef/cookbooks/"
-          scp chef/solo.rb   ubuntu@$SERVER_IP:~/solo.rb
-          scp chef/node.json ubuntu@$SERVER_IP:~/node.json
+          scp chef/cookbooks/docker_setup/recipes/default.rb ubuntu@$SERVER_IP:~/recipe.rb
 
-      - name: Run Chef-solo
+      - name: Run Chef recipe
         run: |
-          ssh ubuntu@$SERVER_IP "sudo CHEF_LICENSE=accept chef-solo -c ~/solo.rb -j ~/node.json"
+          ssh ubuntu@$SERVER_IP "sudo CHEF_LICENSE=accept chef-apply ~/recipe.rb"
 
       - name: Verify container is running
         run: |
