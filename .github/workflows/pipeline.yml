@@ -111,4 +111,5 @@ jobs:
       - name: Verify container is running
         run: |
           ssh ubuntu@$SERVER_IP "docker ps"
+          ssh ubuntu@$SERVER_IP "docker images"
           ssh ubuntu@$SERVER_IP "docker logs sqrt-app"
