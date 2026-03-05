@@ -1,15 +1,53 @@
 #
-# Cookbook:: k8s_setup
+# Cookbook:: docker_setup
 # Recipe:: default
 #
 # Uses Chef to:
-#   1. Install Docker CE on the EC2 instance
-#   2. Pull the application image from Docker Hub
-#   3. Run the container
+#   1. Add Docker's official apt repository
+#   2. Install Docker CE on the EC2 instance
+#   3. Pull the application image from Docker Hub
+#   4. Run the container
 #
 
-# ── 1. Install Docker CE packages ─────────────────────────────────
-%w[docker-ce docker-ce-cli containerd.io].each do |pkg|
+# ── 1. Install prerequisites ───────────────────────────────────────
+%w[ca-certificates curl gnupg lsb-release apt-transport-https].each do |pkg|
+  package pkg
+end
+
+# ── 2. Add Docker's official GPG key ──────────────────────────────
+directory '/etc/apt/keyrings' do
+  mode '0755'
+  action :create
+end
+
+execute 'add_docker_gpg_key' do
+  command 'curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg'
+  creates '/etc/apt/keyrings/docker.gpg'
+end
+
+file '/etc/apt/keyrings/docker.gpg' do
+  mode '0644'
+end
+
+# ── 3. Add Docker apt repository ──────────────────────────────────
+execute 'add_docker_apt_repo' do
+  command <<~BASH
+    echo \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+      https://download.docker.com/linux/ubuntu \
+      $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+  BASH
+  creates '/etc/apt/sources.list.d/docker.list'
+end
+
+# ── 4. Update apt cache after adding the new repo ─────────────────
+execute 'apt_update_after_docker_repo' do
+  command 'apt-get update'
+  action :run
+end
+
+# ── 5. Install Docker CE packages ─────────────────────────────────
+%w[docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin].each do |pkg|
   package pkg
 end
 
