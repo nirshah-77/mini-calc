@@ -1,9 +1,10 @@
-FROM openjdk:17
+FROM openjdk:17-slim
 
 WORKDIR /app
 
-COPY calc.java .
+# Copy and compile the Java source
+COPY SqrtApp.java .
+RUN javac SqrtApp.java
 
-RUN javac calc.java
-
-CMD ["sleep", "infinity"]
+# Run the application
+CMD ["java", "SqrtApp"]
