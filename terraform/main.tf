@@ -103,55 +103,62 @@ resource "aws_security_group" "k8s_sg" {
 locals {
   chef_master_userdata = <<-EOF
     #!/bin/bash
+    exec > /var/log/chef-bootstrap.log 2>&1
     set -e
+
     apt-get update -y
-    apt-get install -y curl git ruby ruby-dev build-essential
-    gem install chef --no-document
+    apt-get install -y curl git
+
+    # Install Chef via omnitruck (pre-built binary — ~60 sec vs 15 min for gem install)
+    curl -L https://omnitruck.chef.io/install.sh | bash
 
     # Clone the repo so chef-solo can find the cookbook
     git clone https://github.com/${var.github_owner}/${var.github_repo}.git /opt/mini-calc
-    cd /opt/mini-calc
 
-    # Write a minimal solo.rb
     cat > /tmp/solo.rb <<SOLORB
-    node_name "master"
-    cookbook_path "/opt/mini-calc/chef/cookbooks"
-    SOLORB
+node_name "master"
+cookbook_path "/opt/mini-calc/chef/cookbooks"
+SOLORB
 
-    # Write the run-list JSON with role=master
     cat > /tmp/node.json <<JSON
-    {
-      "k8s_setup": { "role": "master" },
-      "run_list": ["recipe[k8s_setup]"]
-    }
-    JSON
+{
+  "k8s_setup": { "role": "master" },
+  "run_list": ["recipe[k8s_setup]"]
+}
+JSON
 
     chef-solo -c /tmp/solo.rb -j /tmp/node.json
+
+    # Signal file: pipeline waits for this
+    touch /tmp/chef_done
   EOF
 
   chef_worker_userdata = <<-EOF
     #!/bin/bash
+    exec > /var/log/chef-bootstrap.log 2>&1
     set -e
+
     apt-get update -y
-    apt-get install -y curl git ruby ruby-dev build-essential
-    gem install chef --no-document
+    apt-get install -y curl git
+
+    curl -L https://omnitruck.chef.io/install.sh | bash
 
     git clone https://github.com/${var.github_owner}/${var.github_repo}.git /opt/mini-calc
-    cd /opt/mini-calc
 
     cat > /tmp/solo.rb <<SOLORB
-    node_name "worker"
-    cookbook_path "/opt/mini-calc/chef/cookbooks"
-    SOLORB
+node_name "worker"
+cookbook_path "/opt/mini-calc/chef/cookbooks"
+SOLORB
 
     cat > /tmp/node.json <<JSON
-    {
-      "k8s_setup": { "role": "worker" },
-      "run_list": ["recipe[k8s_setup]"]
-    }
-    JSON
+{
+  "k8s_setup": { "role": "worker" },
+  "run_list": ["recipe[k8s_setup]"]
+}
+JSON
 
     chef-solo -c /tmp/solo.rb -j /tmp/node.json
+    touch /tmp/chef_done
   EOF
 }
 

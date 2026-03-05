@@ -118,7 +118,22 @@ jobs:
 
       - name: Wait for Chef bootstrap to finish
         run: |
-          ssh ubuntu@"$MASTER_IP" "while [ ! -f /home/ubuntu/.kube/config ]; do echo 'Waiting for kubeconfig...'; sleep 30; done; echo 'Kubeconfig ready'"
+          echo "Waiting for Chef bootstrap (up to 40 min)..."
+          for i in $(seq 1 80); do
+            if ssh ubuntu@"$MASTER_IP" "test -f /tmp/chef_done" 2>/dev/null; then
+              echo "✅ Chef bootstrap complete!"
+              break
+            fi
+            # Print last 5 lines of the bootstrap log every minute for visibility
+            echo "--- [Attempt $i/80] Bootstrap log tail ---"
+            ssh ubuntu@"$MASTER_IP" "tail -5 /var/log/chef-bootstrap.log 2>/dev/null || echo '(log not yet available)'"
+            if [ $i -eq 80 ]; then
+              echo "❌ Timed out waiting for Chef bootstrap after 40 minutes"
+              ssh ubuntu@"$MASTER_IP" "cat /var/log/chef-bootstrap.log"
+              exit 1
+            fi
+            sleep 30
+          done
 
       - name: Copy Kubernetes manifests to master
         run: |
