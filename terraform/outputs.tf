@@ -1,9 +1,4 @@
-output "master_public_ip" {
-  description = "Public IP of the Kubernetes master node"
-  value       = aws_instance.k8s_master.public_ip
-}
-
-output "worker_public_ip" {
-  description = "Public IP of the Kubernetes worker node"
-  value       = aws_instance.k8s_worker.public_ip
+output "server_public_ip" {
+  description = "Public IP of the app server EC2 instance"
+  value       = aws_instance.app_server.public_ip
 }

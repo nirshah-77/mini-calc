@@ -40,9 +40,9 @@ data "aws_ami" "ubuntu" {
 # ──────────────────────────────────────────────
 # Security Group
 # ──────────────────────────────────────────────
-resource "aws_security_group" "k8s_sg" {
-  name        = "k8s-security-group"
-  description = "Allow SSH, Kubernetes API, and NodePort traffic"
+resource "aws_security_group" "app_sg" {
+  name        = "app-security-group"
+  description = "Allow SSH and app traffic"
 
   ingress {
     description = "SSH"
@@ -53,35 +53,11 @@ resource "aws_security_group" "k8s_sg" {
   }
 
   ingress {
-    description = "Kubernetes API Server"
-    from_port   = 6443
-    to_port     = 6443
+    description = "App HTTP"
+    from_port   = 8080
+    to_port     = 8080
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "NodePort Service"
-    from_port   = 30007
-    to_port     = 30007
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "Flannel VXLAN"
-    from_port   = 8472
-    to_port     = 8472
-    protocol    = "udp"
-    self        = true
-  }
-
-  ingress {
-    description = "Kubelet & internal cluster traffic"
-    from_port   = 10250
-    to_port     = 10260
-    protocol    = "tcp"
-    self        = true
   }
 
   egress {
@@ -92,18 +68,18 @@ resource "aws_security_group" "k8s_sg" {
   }
 
   tags = {
-    Name = "k8s-sg"
+    Name = "app-sg"
   }
 }
 
 # ──────────────────────────────────────────────
 # EC2 — App Server (Chef configures it via pipeline SSH)
 # ──────────────────────────────────────────────
-resource "aws_instance" "k8s_master" {
+resource "aws_instance" "app_server" {
   ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.instance_type
   key_name               = var.key_name
-  vpc_security_group_ids = [aws_security_group.k8s_sg.id]
+  vpc_security_group_ids = [aws_security_group.app_sg.id]
 
   tags = {
     Name = "docker-app-server"

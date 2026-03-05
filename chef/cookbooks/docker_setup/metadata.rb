@@ -1,7 +1,8 @@
-name 'k8s_setup'
+name 'docker_setup'
 maintainer 'Nir Shah'
 maintainer_email 'nir@example.com'
 license 'MIT'
-description 'Installs and configures Docker and Kubernetes on EC2 instances'
+description 'Installs Docker and runs the sqrt-app container on EC2'
 version '1.0.0'
 chef_version '>= 16.0'
+

@@ -68,7 +68,7 @@ jobs:
       - name: Get server IP
         id: out
         working-directory: ./terraform
-        run: echo "server_ip=$(terraform output -raw master_public_ip)" >> $GITHUB_OUTPUT
+        run: echo "server_ip=$(terraform output -raw server_public_ip)" >> $GITHUB_OUTPUT
 
   # ── JOB 3: SSH into EC2, run Chef, verify container ───────────
   chef-deploy:
@@ -103,13 +103,13 @@ jobs:
       - name: Copy cookbook to EC2
         run: |
           ssh ubuntu@$SERVER_IP "sudo mkdir -p /var/chef/cookbooks"
-          scp -r chef/cookbooks/k8s_setup ubuntu@$SERVER_IP:/tmp/k8s_setup
-          ssh ubuntu@$SERVER_IP "sudo mv /tmp/k8s_setup /var/chef/cookbooks/"
+          scp -r chef/cookbooks/docker_setup ubuntu@$SERVER_IP:/tmp/docker_setup
+          ssh ubuntu@$SERVER_IP "sudo mv /tmp/docker_setup /var/chef/cookbooks/"
 
       - name: Run Chef-solo
         run: |
           ssh ubuntu@$SERVER_IP "
-            echo '{\"run_list\":[\"recipe[k8s_setup]\"]}' | sudo tee /tmp/node.json
+            echo '{\"run_list\":[\"recipe[docker_setup]\"]}' | sudo tee /tmp/node.json
             echo 'cookbook_path [\"/var/chef/cookbooks\"]' | sudo tee /tmp/solo.rb
             sudo chef-solo -c /tmp/solo.rb -j /tmp/node.json
           "
