@@ -3,7 +3,9 @@
 # ──────────────────────────────────────────────
 terraform {
   backend "s3" {
-    bucket = var.s3_bucket         # set via TF_VAR_s3_bucket secret
+    # bucket is passed at init time via:
+    #   terraform init -backend-config="bucket=$TF_VAR_S3_BUCKET"
+    # Variables are NOT allowed directly in backend blocks.
     key    = "mini-calc/terraform.tfstate"
     region = "us-east-1"
   }
