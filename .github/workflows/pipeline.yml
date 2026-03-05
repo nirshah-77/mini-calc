@@ -103,15 +103,15 @@ jobs:
       - name: Copy cookbook and Chef config to EC2
         run: |
           ssh ubuntu@$SERVER_IP "sudo mkdir -p /var/chef/cookbooks"
-          scp -r chef/cookbooks/docker_setup ubuntu@$SERVER_IP:/tmp/docker_setup
-          ssh ubuntu@$SERVER_IP "sudo mv /tmp/docker_setup /var/chef/cookbooks/"
-          # SCP the config files directly — avoids all SSH quoting issues
-          scp chef/solo.rb   ubuntu@$SERVER_IP:/tmp/solo.rb
-          scp chef/node.json ubuntu@$SERVER_IP:/tmp/node.json
+          # SCP everything to ubuntu home dir (always writable, even on re-runs)
+          scp -r chef/cookbooks/docker_setup ubuntu@$SERVER_IP:~/docker_setup
+          ssh ubuntu@$SERVER_IP "sudo rm -rf /var/chef/cookbooks/docker_setup && sudo mv ~/docker_setup /var/chef/cookbooks/"
+          scp chef/solo.rb   ubuntu@$SERVER_IP:~/solo.rb
+          scp chef/node.json ubuntu@$SERVER_IP:~/node.json
 
       - name: Run Chef-solo
         run: |
-          ssh ubuntu@$SERVER_IP "sudo CHEF_LICENSE=accept chef-solo -c /tmp/solo.rb -j /tmp/node.json"
+          ssh ubuntu@$SERVER_IP "sudo CHEF_LICENSE=accept chef-solo -c ~/solo.rb -j ~/node.json"
 
       - name: Verify container is running
         run: |
