@@ -98,7 +98,7 @@ jobs:
 
       - name: Install Chef on EC2
         run: |
-          ssh ubuntu@$SERVER_IP "curl -L https://omnitruck.chef.io/install.sh | sudo bash"
+          ssh ubuntu@$SERVER_IP "curl -L https://omnitruck.chef.io/install.sh | sudo bash && sudo CHEF_LICENSE=accept chef-solo --version"
 
       - name: Copy cookbook to EC2
         run: |
@@ -109,9 +109,9 @@ jobs:
       - name: Run Chef-solo
         run: |
           ssh ubuntu@$SERVER_IP "
-            echo '{\"run_list\":[\"recipe[docker_setup]\"]}' | sudo tee /tmp/node.json
-            echo 'cookbook_path [\"/var/chef/cookbooks\"]' | sudo tee /tmp/solo.rb
-            sudo chef-solo -c /tmp/solo.rb -j /tmp/node.json
+            echo '{"run_list":["recipe[docker_setup]"]}' | sudo tee /tmp/node.json
+            echo 'cookbook_path ["/var/chef/cookbooks"]' | sudo tee /tmp/solo.rb
+            sudo CHEF_LICENSE=accept chef-solo -c /tmp/solo.rb -j /tmp/node.json
           "
 
       - name: Verify container is running
