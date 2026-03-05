@@ -96,54 +96,33 @@ resource "aws_security_group" "k8s_sg" {
   }
 }
 
-# ──────────────────────────────────────────────
-# User-data: install Chef + Docker + K8s inline
-# No git clone needed — cookbook embedded here
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────
+# User-data: Chef installs Docker, pulls image, runs container
+# Workflow: GitHub → Docker Hub → Terraform EC2 → Chef → Container
+# ─────────────────────────────────────────────────────────────────
 locals {
-  # ── shared bootstrap steps (repos + Chef + packages) ───────────
-  common_bootstrap = <<-COMMON
+  chef_userdata = <<-EOF
     #!/bin/bash
     exec > /var/log/chef-bootstrap.log 2>&1
     set -ex
 
-    # ── 1. Disable swap (Kubernetes requirement) ─────────────────
-    swapoff -a
-    sed -i '/ swap / s/^/#/' /etc/fstab
-
-    # ── 2. Kernel modules ────────────────────────────────────────
-    modprobe overlay
-    modprobe br_netfilter
-    printf 'overlay\nbr_netfilter\n' > /etc/modules-load.d/k8s.conf
-    printf 'net.bridge.bridge-nf-call-iptables=1\nnet.bridge.bridge-nf-call-ip6tables=1\nnet.ipv4.ip_forward=1\n' > /etc/sysctl.d/k8s.conf
-    sysctl --system
-
-    # ── 3. Package prerequisites ─────────────────────────────────
+    # ── 1. Prerequisites ─────────────────────────────────────────
     apt-get update -y
     apt-get install -y curl apt-transport-https ca-certificates gnupg lsb-release
 
-    # ── 4. Docker repository ─────────────────────────────────────
+    # ── 2. Add Docker CE apt repository ──────────────────────────
     mkdir -p /usr/share/keyrings
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
       | gpg --dearmor -o /usr/share/keyrings/docker.gpg
     echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker.gpg] \
 https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
       > /etc/apt/sources.list.d/docker.list
-
-    # ── 5. Kubernetes repository ─────────────────────────────────
-    mkdir -p /etc/apt/keyrings
-    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key \
-      | gpg --dearmor -o /etc/apt/keyrings/kubernetes.gpg
-    echo "deb [signed-by=/etc/apt/keyrings/kubernetes.gpg] \
-https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /" \
-      > /etc/apt/sources.list.d/kubernetes.list
-
     apt-get update -y
 
-    # ── 6. Install Chef (pre-built binary, ~60s — NOT gem install) ─
+    # ── 3. Install Chef via omnitruck (pre-built binary ~60s) ────
     curl -L https://omnitruck.chef.io/install.sh | bash
 
-    # ── 7. Write Chef cookbook inline (NO git clone needed) ───────
+    # ── 4. Write Chef cookbook inline — no git clone needed ───────
     mkdir -p /var/chef/cookbooks/k8s_setup/recipes
 
     cat > /var/chef/cookbooks/k8s_setup/metadata.rb <<'METADATA'
@@ -152,16 +131,26 @@ version '1.0.0'
 chef_version '>= 16'
 METADATA
 
+    # Recipe: install Docker, pull image, run container
     cat > /var/chef/cookbooks/k8s_setup/recipes/default.rb <<'RECIPE'
-# Install Docker CE and Kubernetes packages
-%w[
-  docker-ce docker-ce-cli containerd.io
-  kubelet kubeadm kubectl
-].each { |pkg| package pkg }
+# Step 1 — Install Docker CE
+%w[docker-ce docker-ce-cli containerd.io].each { |pkg| package pkg }
 
-# Enable and start services
-service('docker')   { action [:enable, :start] }
-service('kubelet')  { action [:enable, :start] }
+# Step 2 — Enable Docker service
+service 'docker' do
+  action [:enable, :start]
+end
+
+# Step 3 — Pull the application image from Docker Hub
+execute 'pull_sqrt_image' do
+  command 'docker pull nirshah77/sqrt-app:latest'
+end
+
+# Step 4 — Run the container (idempotent: skips if already running)
+execute 'run_sqrt_container' do
+  command 'docker run -d --name sqrt-app --restart unless-stopped nirshah77/sqrt-app:latest'
+  not_if 'docker ps -a --format "{{.Names}}" | grep -q "^sqrt-app$"'
+end
 RECIPE
 
     cat > /tmp/solo.rb <<'SOLORB'
@@ -172,55 +161,13 @@ SOLORB
 {"run_list":["recipe[k8s_setup]"]}
 NODEJSON
 
-    # ── 8. Run Chef-solo ─────────────────────────────────────────
+    # ── 5. Run Chef → installs Docker, pulls image, runs container ─
     chef-solo -c /tmp/solo.rb -j /tmp/node.json
 
-    # ── 9. Configure containerd with systemd cgroup driver ───────
-    mkdir -p /etc/containerd
-    containerd config default > /etc/containerd/config.toml
-    sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
-    systemctl restart containerd
-    systemctl restart kubelet
-  COMMON
-
-  chef_master_userdata = <<-EOF
-    ${local.common_bootstrap}
-
-    # ── MASTER ONLY: initialise the Kubernetes cluster ───────────
-    kubeadm init --pod-network-cidr=10.244.0.0/16
-
-    # Set up kubeconfig for ubuntu user
-    mkdir -p /home/ubuntu/.kube
-    cp /etc/kubernetes/admin.conf /home/ubuntu/.kube/config
-    chown -R ubuntu:ubuntu /home/ubuntu/.kube
-
-    export KUBECONFIG=/etc/kubernetes/admin.conf
-
-    # Apply Flannel CNI overlay network
-    kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
-
-    # Remove control-plane taint so pods can schedule on master
-    # (enables single-node cluster — worker is additional capacity)
-    kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
-
-    # Save join command so worker can use it
-    kubeadm token create --print-join-command > /home/ubuntu/join_command.sh
-    chmod +x /home/ubuntu/join_command.sh
-
-    # Signal: bootstrap complete
-    touch /tmp/chef_done
-  EOF
-
-  chef_worker_userdata = <<-EOF
-    ${local.common_bootstrap}
-
-    # Worker node: packages are installed by Chef above.
-    # The actual `kubeadm join` is run by the pipeline after
-    # it retrieves the join command from the master node.
+    # Signal file: pipeline waits on this to confirm bootstrap done
     touch /tmp/chef_done
   EOF
 }
-
 
 # ──────────────────────────────────────────────
 # EC2 — Kubernetes Master node
@@ -230,24 +177,24 @@ resource "aws_instance" "k8s_master" {
   instance_type          = var.instance_type
   key_name               = var.key_name
   vpc_security_group_ids = [aws_security_group.k8s_sg.id]
-  user_data              = local.chef_master_userdata
+  user_data              = local.chef_userdata
 
   tags = {
-    Name = "calc-k8s-master"
+    Name = "docker-app-server-1"
   }
 }
 
 # ──────────────────────────────────────────────
-# EC2 — Kubernetes Worker node
+# EC2 — Docker App Server 2
 # ──────────────────────────────────────────────
 resource "aws_instance" "k8s_worker" {
   ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.instance_type
   key_name               = var.key_name
   vpc_security_group_ids = [aws_security_group.k8s_sg.id]
-  user_data              = local.chef_worker_userdata
+  user_data              = local.chef_userdata
 
   tags = {
-    Name = "calc-k8s-worker"
+    Name = "docker-app-server-2"
   }
 }
