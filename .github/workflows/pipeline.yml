@@ -50,14 +50,12 @@ jobs:
     env:
       AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      TF_VAR_ami:            ${{ secrets.TF_VAR_AMI }}
       TF_VAR_key_name:       ${{ secrets.TF_VAR_KEY_NAME }}
-      TF_VAR_s3_bucket:      ${{ secrets.TF_VAR_S3_BUCKET }}
-      TF_VAR_github_owner:   ${{ github.repository_owner }}
-      TF_VAR_github_repo:    ${{ github.event.repository.name }}
 
+    # BUG FIX: both IPs must be declared here to pass between jobs
     outputs:
       master_ip: ${{ steps.tfout.outputs.master_ip }}
+      worker_ip: ${{ steps.tfout.outputs.worker_ip }}
 
     steps:
       - name: Checkout code
@@ -79,12 +77,13 @@ jobs:
         working-directory: ./terraform
         run: terraform apply -auto-approve
 
+      # BUG FIX: write BOTH IPs to GITHUB_OUTPUT (worker_ip was missing before)
       - name: Capture outputs
         id: tfout
         working-directory: ./terraform
         run: |
           echo "master_ip=$(terraform output -raw master_public_ip)" >> $GITHUB_OUTPUT
-          echo "worker_ip=$(terraform output -raw worker_public_ip)"
+          echo "worker_ip=$(terraform output -raw worker_public_ip)" >> $GITHUB_OUTPUT
 
   # ──────────────────────────────────────────────────────────────
   # JOB 3: Deploy to Kubernetes cluster on EC2
@@ -96,6 +95,7 @@ jobs:
 
     env:
       MASTER_IP: ${{ needs.terraform-apply.outputs.master_ip }}
+      WORKER_IP: ${{ needs.terraform-apply.outputs.worker_ip }}
 
     steps:
       - name: Checkout code
@@ -107,41 +107,71 @@ jobs:
           echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H "$MASTER_IP" >> ~/.ssh/known_hosts
+          ssh-keyscan -H "$WORKER_IP" >> ~/.ssh/known_hosts
 
-      - name: Wait for EC2 to be reachable
+      # ── Wait for EC2 instances to boot and accept SSH ──────────
+      - name: Wait for master SSH
         run: |
           for i in $(seq 1 20); do
-            ssh -o ConnectTimeout=10 ubuntu@"$MASTER_IP" "echo 'SSH ready'" && break
-            echo "Attempt $i: waiting 30s..."
+            ssh -o ConnectTimeout=10 ubuntu@"$MASTER_IP" "echo OK" 2>/dev/null && break
+            echo "Attempt $i/20 — master not ready, waiting 30s..."
             sleep 30
           done
 
-      - name: Wait for Chef bootstrap to finish
+      - name: Wait for worker SSH
         run: |
-          echo "Waiting for Chef bootstrap (up to 40 min)..."
-          for i in $(seq 1 80); do
+          for i in $(seq 1 20); do
+            ssh -o ConnectTimeout=10 ubuntu@"$WORKER_IP" "echo OK" 2>/dev/null && break
+            echo "Attempt $i/20 — worker not ready, waiting 30s..."
+            sleep 30
+          done
+
+      # ── Wait for Chef bootstrap on both nodes ─────────────────
+      # /tmp/chef_done is created at the very end of user_data
+      - name: Wait for master Chef bootstrap
+        run: |
+          echo "Polling master Chef bootstrap (up to 20 min)..."
+          for i in $(seq 1 40); do
             if ssh ubuntu@"$MASTER_IP" "test -f /tmp/chef_done" 2>/dev/null; then
-              echo "✅ Chef bootstrap complete!"
+              echo "✅ Master bootstrap done!"
               break
             fi
-            # Print last 5 lines of the bootstrap log every minute for visibility
-            echo "--- [Attempt $i/80] Bootstrap log tail ---"
-            ssh ubuntu@"$MASTER_IP" "tail -5 /var/log/chef-bootstrap.log 2>/dev/null || echo '(log not yet available)'"
-            if [ $i -eq 80 ]; then
-              echo "❌ Timed out waiting for Chef bootstrap after 40 minutes"
-              ssh ubuntu@"$MASTER_IP" "cat /var/log/chef-bootstrap.log"
-              exit 1
-            fi
+            echo "--- Master [attempt $i/40] ---"
+            ssh ubuntu@"$MASTER_IP" "tail -3 /var/log/chef-bootstrap.log 2>/dev/null || echo '(log pending)'"
+            [ $i -eq 40 ] && { echo "❌ Master timed out"; ssh ubuntu@"$MASTER_IP" "cat /var/log/chef-bootstrap.log"; exit 1; }
             sleep 30
           done
 
-      - name: Copy Kubernetes manifests to master
+      - name: Wait for worker Chef bootstrap
         run: |
-          scp -r k8s/ ubuntu@"$MASTER_IP":/home/ubuntu/k8s
+          echo "Polling worker Chef bootstrap (up to 20 min)..."
+          for i in $(seq 1 40); do
+            if ssh ubuntu@"$WORKER_IP" "test -f /tmp/chef_done" 2>/dev/null; then
+              echo "✅ Worker bootstrap done!"
+              break
+            fi
+            echo "--- Worker [attempt $i/40] ---"
+            ssh ubuntu@"$WORKER_IP" "tail -3 /var/log/chef-bootstrap.log 2>/dev/null || echo '(log pending)'"
+            [ $i -eq 40 ] && { echo "❌ Worker timed out"; ssh ubuntu@"$WORKER_IP" "cat /var/log/chef-bootstrap.log"; exit 1; }
+            sleep 30
+          done
 
-      - name: Wait for all nodes to be Ready
+      # ── Join worker to the cluster ─────────────────────────────
+      - name: Join worker node to Kubernetes cluster
         run: |
-          ssh ubuntu@"$MASTER_IP" "kubectl wait --for=condition=Ready nodes --all --timeout=600s"
+          JOIN_CMD=$(ssh ubuntu@"$MASTER_IP" "cat /home/ubuntu/join_command.sh")
+          echo "Join command retrieved. Executing on worker..."
+          ssh ubuntu@"$WORKER_IP" "sudo $JOIN_CMD"
+
+      # ── Wait for both nodes to be Ready ───────────────────────
+      - name: Wait for all nodes Ready
+        run: |
+          ssh ubuntu@"$MASTER_IP" \
+            "kubectl wait --for=condition=Ready nodes --all --timeout=600s && kubectl get nodes -o wide"
+
+      # ── Deploy the application ─────────────────────────────────
+      - name: Copy Kubernetes manifests to master
+        run: scp -r k8s/ ubuntu@"$MASTER_IP":/home/ubuntu/k8s
 
       - name: Deploy application to Kubernetes
         run: |
@@ -150,6 +180,6 @@ jobs:
 
       - name: Verify deployment
         run: |
-          ssh ubuntu@"$MASTER_IP" "kubectl rollout status deployment/calc-deployment --timeout=120s"
+          ssh ubuntu@"$MASTER_IP" "kubectl rollout status deployment/calc-deployment --timeout=180s"
           ssh ubuntu@"$MASTER_IP" "kubectl get pods -o wide"
           ssh ubuntu@"$MASTER_IP" "kubectl get svc calc-service"
