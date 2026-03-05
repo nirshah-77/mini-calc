@@ -1,5 +1,5 @@
 name: DevOps Pipeline
-# Workflow: GitHub → Build Java → Docker Hub → Terraform EC2 → Chef (Docker install + pull + run)
+# Flow: Push → Build Java → Docker Hub → Terraform EC2 → Chef via SSH → Container
 
 on:
   push:
@@ -7,63 +7,50 @@ on:
       - main
 
 jobs:
-  # ──────────────────────────────────────────────────────────────
-  # JOB 1: Compile Java → Build Docker Image → Push to Docker Hub
-  # ──────────────────────────────────────────────────────────────
+  # ── JOB 1: Compile Java, build & push Docker image ────────────
   build-and-push:
-    name: Build & Push Docker Image
+    name: Build and Push Docker Image
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: Set up Java 17
-        uses: actions/setup-java@v3
+      - uses: actions/setup-java@v3
         with:
           distribution: temurin
           java-version: 17
 
-      - name: Compile Java application
+      - name: Compile
         run: javac SqrtApp.java
 
-      - name: Log in to Docker Hub
+      - name: Login to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build and push Docker image
+      - name: Build and Push
         uses: docker/build-push-action@v4
         with:
           context: .
           push: true
           tags: nirshah77/sqrt-app:latest
 
-  # ──────────────────────────────────────────────────────────────
-  # JOB 2: Terraform provisions EC2 → Chef runs on boot via
-  #         user_data: installs Docker, pulls image, runs container
-  # ──────────────────────────────────────────────────────────────
+  # ── JOB 2: Terraform creates the EC2 instance ─────────────────
   terraform-apply:
-    name: Terraform Apply (Provision EC2)
+    name: Terraform Apply
     needs: build-and-push
     runs-on: ubuntu-latest
-
     env:
       AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       TF_VAR_key_name:       ${{ secrets.TF_VAR_KEY_NAME }}
       TF_VAR_s3_bucket:      ${{ secrets.TF_VAR_S3_BUCKET }}
-
     outputs:
-      server_ip: ${{ steps.tfout.outputs.server_ip }}
-
+      server_ip: ${{ steps.out.outputs.server_ip }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v2
+      - uses: hashicorp/setup-terraform@v2
         with:
           terraform_wrapper: false
 
@@ -78,139 +65,56 @@ jobs:
         working-directory: ./terraform
         run: terraform apply -auto-approve
 
-      - name: Capture server IP
-        id: tfout
+      - name: Get server IP
+        id: out
         working-directory: ./terraform
-        run: |
-          echo "server_ip=$(terraform output -raw master_public_ip)" >> $GITHUB_OUTPUT
+        run: echo "server_ip=$(terraform output -raw master_public_ip)" >> $GITHUB_OUTPUT
 
-  # ──────────────────────────────────────────────────────────────
-  # JOB 3: Wait for Chef bootstrap, then verify container is running
-  # ──────────────────────────────────────────────────────────────
-  verify-container:
-    name: Verify Docker Container Running
+  # ── JOB 3: SSH into EC2, run Chef, verify container ───────────
+  chef-deploy:
+    name: Chef Deploy via SSH
     needs: terraform-apply
     runs-on: ubuntu-latest
-
     env:
       SERVER_IP: ${{ needs.terraform-apply.outputs.server_ip }}
-
     steps:
-      - name: Set up SSH key
+      - uses: actions/checkout@v3
+
+      - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H "$SERVER_IP" >> ~/.ssh/known_hosts
 
-      - name: Wait for EC2 to accept SSH
+      - name: Wait for EC2 SSH to be ready
         run: |
-          for i in $(seq 1 20); do
-            ssh -o ConnectTimeout=10 ubuntu@"$SERVER_IP" "echo SSH ready" 2>/dev/null && break
-            echo "Attempt $i/20 — waiting 30s..."
-            sleep 30
+          for i in $(seq 1 15); do
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+              ubuntu@$SERVER_IP "echo ready" 2>/dev/null && break
+            echo "Waiting... ($i/15)"
+            sleep 20
           done
+          ssh-keyscan -H $SERVER_IP >> ~/.ssh/known_hosts
 
-      - name: Wait for Chef bootstrap to complete
+      - name: Install Chef on EC2
         run: |
-          echo "Polling for /tmp/chef_done (Chef: install Docker → pull image → run container)..."
-          for i in $(seq 1 40); do
-            if ssh ubuntu@"$SERVER_IP" "test -f /tmp/chef_done" 2>/dev/null; then
-              echo "✅ Chef bootstrap complete!"
-              break
-            fi
-            echo "--- [Attempt $i/40] Bootstrap log tail ---"
-            ssh ubuntu@"$SERVER_IP" "tail -3 /var/log/chef-bootstrap.log 2>/dev/null || echo '(log not yet available)'"
-            [ $i -eq 40 ] && { echo "❌ Timed out — dumping full log:"; ssh ubuntu@"$SERVER_IP" "cat /var/log/chef-bootstrap.log"; exit 1; }
-            sleep 30
-          done
+          ssh ubuntu@$SERVER_IP "curl -L https://omnitruck.chef.io/install.sh | sudo bash"
 
-      - name: Verify Docker container is running
+      - name: Copy cookbook to EC2
         run: |
-          echo "=== Docker containers on EC2 ==="
-          ssh ubuntu@"$SERVER_IP" "docker ps"
-          echo ""
-          echo "=== Container logs ==="
-          ssh ubuntu@"$SERVER_IP" "docker logs sqrt-app"
+          ssh ubuntu@$SERVER_IP "sudo mkdir -p /var/chef/cookbooks"
+          scp -r chef/cookbooks/k8s_setup ubuntu@$SERVER_IP:/tmp/k8s_setup
+          ssh ubuntu@$SERVER_IP "sudo mv /tmp/k8s_setup /var/chef/cookbooks/"
 
-  # ══════════════════════════════════════════════════════════════
-  # JOB 4 (COMMENTED OUT): Kubernetes deployment
-  # Uncomment when you want to re-enable full K8s orchestration.
-  # ══════════════════════════════════════════════════════════════
-  # deploy-kubernetes:
-  #   name: Deploy to Kubernetes
-  #   needs: terraform-apply
-  #   runs-on: ubuntu-latest
-  #   if: false   # <-- set to true to re-enable
-  #
-  #   env:
-  #     MASTER_IP: ${{ needs.terraform-apply.outputs.master_ip }}
-  #     WORKER_IP: ${{ needs.terraform-apply.outputs.worker_ip }}
-  #
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v3
-  #
-  #     - name: Set up SSH key
-  #       run: |
-  #         mkdir -p ~/.ssh
-  #         echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-  #         chmod 600 ~/.ssh/id_rsa
-  #         ssh-keyscan -H "$MASTER_IP" >> ~/.ssh/known_hosts
-  #         ssh-keyscan -H "$WORKER_IP" >> ~/.ssh/known_hosts
-  #
-  #     - name: Wait for master SSH
-  #       run: |
-  #         for i in $(seq 1 20); do
-  #           ssh -o ConnectTimeout=10 ubuntu@"$MASTER_IP" "echo OK" 2>/dev/null && break
-  #           echo "Attempt $i/20 — master not ready, waiting 30s..."
-  #           sleep 30
-  #         done
-  #
-  #     - name: Wait for worker SSH
-  #       run: |
-  #         for i in $(seq 1 20); do
-  #           ssh -o ConnectTimeout=10 ubuntu@"$WORKER_IP" "echo OK" 2>/dev/null && break
-  #           echo "Attempt $i/20 — worker not ready, waiting 30s..."
-  #           sleep 30
-  #         done
-  #
-  #     - name: Wait for master Chef bootstrap
-  #       run: |
-  #         for i in $(seq 1 40); do
-  #           ssh ubuntu@"$MASTER_IP" "test -f /tmp/chef_done" 2>/dev/null && { echo "Done"; break; }
-  #           ssh ubuntu@"$MASTER_IP" "tail -3 /var/log/chef-bootstrap.log 2>/dev/null || true"
-  #           [ $i -eq 40 ] && exit 1; sleep 30
-  #         done
-  #
-  #     - name: Wait for worker Chef bootstrap
-  #       run: |
-  #         for i in $(seq 1 40); do
-  #           ssh ubuntu@"$WORKER_IP" "test -f /tmp/chef_done" 2>/dev/null && { echo "Done"; break; }
-  #           ssh ubuntu@"$WORKER_IP" "tail -3 /var/log/chef-bootstrap.log 2>/dev/null || true"
-  #           [ $i -eq 40 ] && exit 1; sleep 30
-  #         done
-  #
-  #     - name: Join worker node to Kubernetes cluster
-  #       run: |
-  #         JOIN_CMD=$(ssh ubuntu@"$MASTER_IP" "cat /home/ubuntu/join_command.sh")
-  #         ssh ubuntu@"$WORKER_IP" "sudo $JOIN_CMD"
-  #
-  #     - name: Wait for all nodes Ready
-  #       run: |
-  #         ssh ubuntu@"$MASTER_IP" "kubectl wait --for=condition=Ready nodes --all --timeout=600s"
-  #         ssh ubuntu@"$MASTER_IP" "kubectl get nodes -o wide"
-  #
-  #     - name: Copy Kubernetes manifests to master
-  #       run: scp -r k8s/ ubuntu@"$MASTER_IP":/home/ubuntu/k8s
-  #
-  #     - name: Deploy application to Kubernetes
-  #       run: |
-  #         ssh ubuntu@"$MASTER_IP" "kubectl apply -f /home/ubuntu/k8s/deployment.yaml"
-  #         ssh ubuntu@"$MASTER_IP" "kubectl apply -f /home/ubuntu/k8s/service.yaml"
-  #
-  #     - name: Verify deployment
-  #       run: |
-  #         ssh ubuntu@"$MASTER_IP" "kubectl rollout status deployment/calc-deployment --timeout=180s"
-  #         ssh ubuntu@"$MASTER_IP" "kubectl get pods -o wide"
-  #         ssh ubuntu@"$MASTER_IP" "kubectl get svc calc-service"
+      - name: Run Chef-solo
+        run: |
+          ssh ubuntu@$SERVER_IP "
+            echo '{\"run_list\":[\"recipe[k8s_setup]\"]}' | sudo tee /tmp/node.json
+            echo 'cookbook_path [\"/var/chef/cookbooks\"]' | sudo tee /tmp/solo.rb
+            sudo chef-solo -c /tmp/solo.rb -j /tmp/node.json
+          "
+
+      - name: Verify container is running
+        run: |
+          ssh ubuntu@$SERVER_IP "docker ps"
+          ssh ubuntu@$SERVER_IP "docker logs sqrt-app"
