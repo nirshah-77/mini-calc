@@ -19,6 +19,25 @@ provider "aws" {
 }
 
 # ──────────────────────────────────────────────
+# Auto-fetch latest Ubuntu 22.04 LTS AMI
+# (no need to hardcode or store as a secret)
+# ──────────────────────────────────────────────
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = ["099720109477"] # Canonical official account
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+
+# ──────────────────────────────────────────────
 # Security Group
 # ──────────────────────────────────────────────
 resource "aws_security_group" "k8s_sg" {
@@ -140,7 +159,7 @@ locals {
 # EC2 — Kubernetes Master node
 # ──────────────────────────────────────────────
 resource "aws_instance" "k8s_master" {
-  ami                    = var.ami
+  ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.instance_type
   key_name               = var.key_name
   vpc_security_group_ids = [aws_security_group.k8s_sg.id]
@@ -155,7 +174,7 @@ resource "aws_instance" "k8s_master" {
 # EC2 — Kubernetes Worker node
 # ──────────────────────────────────────────────
 resource "aws_instance" "k8s_worker" {
-  ami                    = var.ami
+  ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.instance_type
   key_name               = var.key_name
   vpc_security_group_ids = [aws_security_group.k8s_sg.id]

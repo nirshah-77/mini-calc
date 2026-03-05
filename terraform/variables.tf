@@ -8,10 +8,6 @@ variable "instance_type" {
   default     = "t2.medium"
 }
 
-variable "ami" {
-  description = "Ubuntu 22.04 AMI ID for the target region (set via TF_VAR_ami)"
-}
-
 variable "key_name" {
   description = "Name of the EC2 key pair for SSH access (set via TF_VAR_key_name)"
 }
