@@ -65,6 +65,6 @@ end
 # --restart unless-stopped  : auto-restart on EC2 reboot
 # not_if guard              : idempotent — won't create duplicate containers
 execute 'run_sqrt_container' do
-  command 'docker run -d --name sqrt-app --restart unless-stopped nirshah77/sqrt-app:latest'
+  command 'docker run -d --name sqrt-app -p 8080:8080 --restart unless-stopped nirshah77/sqrt-app:latest'
   not_if 'docker ps -a --format "{{.Names}}" | grep -q "^sqrt-app$"'
 end

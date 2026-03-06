@@ -1,6 +1,5 @@
 name: DevOps Pipeline
 # Flow: Push → Build Java → Docker Hub → Terraform EC2 → Chef via SSH → Container
-
 on:
   push:
     branches:
@@ -13,21 +12,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-
       - uses: actions/setup-java@v3
         with:
           distribution: temurin
           java-version: 17
-
       - name: Compile
         run: javac SqrtApp.java
-
       - name: Login to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
-
       - name: Build and Push
         uses: docker/build-push-action@v4
         with:
@@ -49,22 +44,18 @@ jobs:
       server_ip: ${{ steps.out.outputs.server_ip }}
     steps:
       - uses: actions/checkout@v3
-
       - uses: hashicorp/setup-terraform@v2
         with:
           terraform_wrapper: false
-
       - name: Terraform Init
         working-directory: ./terraform
         run: |
           terraform init \
             -backend-config="bucket=${{ secrets.TF_VAR_S3_BUCKET }}" \
             -backend-config="region=us-east-1"
-
       - name: Terraform Apply
         working-directory: ./terraform
         run: terraform apply -auto-approve
-
       - name: Get server IP
         id: out
         working-directory: ./terraform
@@ -86,30 +77,59 @@ jobs:
           echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
 
+      # FIX 1: Proper retry loop with exit 1 on failure
       - name: Wait for EC2 SSH to be ready
         run: |
-          for i in $(seq 1 15); do
-            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
-              ubuntu@$SERVER_IP "echo ready" 2>/dev/null && break
-            echo "Waiting... ($i/15)"
-            sleep 20
+          echo "Waiting for SSH on $SERVER_IP..."
+          for i in $(seq 1 20); do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+              ubuntu@$SERVER_IP "echo ready" 2>/dev/null; then
+              echo "SSH is up!"
+              ssh-keyscan -H $SERVER_IP >> ~/.ssh/known_hosts
+              exit 0
+            fi
+            echo "Attempt $i/20 failed, retrying in 15s..."
+            sleep 15
           done
-          ssh-keyscan -H $SERVER_IP >> ~/.ssh/known_hosts
+          echo "ERROR: SSH never became available"
+          exit 1
 
       - name: Install Chef on EC2
         run: |
-          ssh ubuntu@$SERVER_IP "curl -L https://omnitruck.chef.io/install.sh | sudo bash"
+          ssh ubuntu@$SERVER_IP \
+            "curl -L https://omnitruck.chef.io/install.sh | sudo bash -s -- -v 18"
 
-      - name: Copy recipe to EC2
+      # FIX 2: Copy the entire cookbook, not just the recipe file
+      - name: Copy cookbook to EC2
         run: |
-          scp chef/cookbooks/docker_setup/recipes/default.rb ubuntu@$SERVER_IP:~/recipe.rb
+          ssh ubuntu@$SERVER_IP "sudo mkdir -p /var/chef/cookbooks && sudo chown ubuntu:ubuntu /var/chef/cookbooks"
+          scp -r chef/cookbooks/docker_setup ubuntu@$SERVER_IP:/var/chef/cookbooks/
 
+      # FIX 3: Use chef-client (not chef-apply) with a config file
       - name: Run Chef recipe
         run: |
-          ssh ubuntu@$SERVER_IP "sudo CHEF_LICENSE=accept chef-apply ~/recipe.rb"
+          ssh ubuntu@$SERVER_IP bash << 'EOF'
+            # Create chef config pointing to cookbook path
+            sudo mkdir -p /etc/chef
+            sudo bash -c 'echo "cookbook_path [\"/var/chef/cookbooks\"]" > /etc/chef/client.rb'
 
+            # Run chef-client in local mode
+            sudo CHEF_LICENSE=accept chef-client \
+              --local-mode \
+              --runlist 'recipe[docker_setup::default]' \
+              --logfile /tmp/chef-run.log \
+              --log_level info
+
+            # Print logs so they show in GitHub Actions
+            cat /tmp/chef-run.log
+          EOF
+
+      # FIX 4: Use sudo for docker commands in verify step
       - name: Verify container is running
         run: |
-          ssh ubuntu@$SERVER_IP "docker ps"
-          ssh ubuntu@$SERVER_IP "docker images"
-          ssh ubuntu@$SERVER_IP "docker logs sqrt-app"
+          echo "=== Running containers ==="
+          ssh ubuntu@$SERVER_IP "sudo docker ps"
+          echo "=== Images ==="
+          ssh ubuntu@$SERVER_IP "sudo docker images"
+          echo "=== Container logs ==="
+          ssh ubuntu@$SERVER_IP "sudo docker logs sqrt-app"
