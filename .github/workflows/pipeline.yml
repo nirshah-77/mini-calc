@@ -128,8 +128,8 @@ jobs:
       - name: Verify container is running
         run: |
           echo "=== Running containers ==="
-          ssh ubuntu@$SERVER_IP "sudo docker ps"
+          ssh ubuntu@$SERVER_IP "sudo /usr/bin/docker ps"
           echo "=== Images ==="
-          ssh ubuntu@$SERVER_IP "sudo docker images"
+          ssh ubuntu@$SERVER_IP "sudo /usr/bin/docker images"
           echo "=== Container logs ==="
-          ssh ubuntu@$SERVER_IP "sudo docker logs sqrt-app"
+          ssh ubuntu@$SERVER_IP "sudo /usr/bin/docker logs sqrt-app"
