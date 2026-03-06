@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:   # allows manual trigger from GitHub Actions UI
 
 jobs:
   # ── JOB 1: Compile Java, build & push Docker image ────────────
