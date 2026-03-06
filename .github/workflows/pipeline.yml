@@ -99,37 +99,24 @@ jobs:
           ssh ubuntu@$SERVER_IP \
             "curl -L https://omnitruck.chef.io/install.sh | sudo bash -s -- -v 18"
 
-      # FIX 2: Copy the entire cookbook, not just the recipe file
       - name: Copy cookbook to EC2
         run: |
-          ssh ubuntu@$SERVER_IP "sudo mkdir -p /var/chef/cookbooks && sudo chown ubuntu:ubuntu /var/chef/cookbooks"
-          scp -r chef/cookbooks/docker_setup ubuntu@$SERVER_IP:/var/chef/cookbooks/
+          # Create the exact path Chef expects
+          ssh ubuntu@$SERVER_IP "sudo mkdir -p /var/chef/cookbooks/docker_setup/recipes && sudo chown -R ubuntu:ubuntu /var/chef/cookbooks"
+          scp chef/cookbooks/docker_setup/recipes/default.rb ubuntu@$SERVER_IP:/var/chef/cookbooks/docker_setup/recipes/default.rb
+          scp chef/cookbooks/docker_setup/metadata.rb ubuntu@$SERVER_IP:/var/chef/cookbooks/docker_setup/metadata.rb
 
-      # FIX 3: Use chef-client (not chef-apply) with a config file
       - name: Run Chef recipe
         run: |
-          ssh ubuntu@$SERVER_IP bash << 'EOF'
-            # Create chef config pointing to cookbook path
-            sudo mkdir -p /etc/chef
-            sudo bash -c 'echo "cookbook_path [\"/var/chef/cookbooks\"]" > /etc/chef/client.rb'
+          ssh ubuntu@$SERVER_IP "sudo mkdir -p /etc/chef && echo 'cookbook_path [\"/var/chef/cookbooks\"]' | sudo tee /etc/chef/client.rb"
+          ssh ubuntu@$SERVER_IP "ls -la /var/chef/cookbooks/docker_setup/recipes/"
+          ssh ubuntu@$SERVER_IP "sudo CHEF_LICENSE=accept chef-client --local-mode --config /etc/chef/client.rb --runlist 'recipe[docker_setup::default]' --logfile /tmp/chef-run.log --log_level info"
+          ssh ubuntu@$SERVER_IP "cat /tmp/chef-run.log"
+          ssh ubuntu@$SERVER_IP "sudo usermod -aG docker ubuntu"
 
-            # Run chef-client in local mode
-            sudo CHEF_LICENSE=accept chef-client \
-              --local-mode \
-              --runlist 'recipe[docker_setup::default]' \
-              --logfile /tmp/chef-run.log \
-              --log_level info
-
-            # Print logs so they show in GitHub Actions
-            cat /tmp/chef-run.log
-          EOF
-
-      # FIX 4: Use sudo for docker commands in verify step
       - name: Verify container is running
         run: |
           echo "=== Running containers ==="
           ssh ubuntu@$SERVER_IP "sudo /usr/bin/docker ps"
-          echo "=== Images ==="
-          ssh ubuntu@$SERVER_IP "sudo /usr/bin/docker images"
           echo "=== Container logs ==="
           ssh ubuntu@$SERVER_IP "sudo /usr/bin/docker logs sqrt-app"
