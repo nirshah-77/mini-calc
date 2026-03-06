@@ -62,9 +62,14 @@ execute 'pull_sqrt_image' do
 end
 
 # ── 4. Run the container ──────────────────────────────────────────
+# -i                        : keep stdin open (needed for docker exec -it ... java calc)
 # --restart unless-stopped  : auto-restart on EC2 reboot
 # not_if guard              : idempotent — won't create duplicate containers
+#
+# To test interactively once deployed:
+#   docker exec -it sqrt-app java calc
 execute 'run_sqrt_container' do
-  command 'docker run -d --name sqrt-app -p 8080:8080 --restart unless-stopped nirshah77/sqrt-app:latest'
+  command 'docker run -d -i --name sqrt-app -p 8080:8080 --restart unless-stopped nirshah77/sqrt-app:latest'
   not_if 'docker ps -a --format "{{.Names}}" | grep -q "^sqrt-app$"'
 end
+

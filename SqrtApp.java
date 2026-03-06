@@ -1,3 +1,5 @@
+import java.util.Scanner;
+
 public class SqrtApp {
     public static void main(String[] args) {
         Scanner sc = new Scanner(System.in);
@@ -9,4 +11,5 @@ public class SqrtApp {
         double result = Math.sqrt(num);
 
         System.out.println("Square root: " + result);
+    }
 }
