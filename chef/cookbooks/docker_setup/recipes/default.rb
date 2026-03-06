@@ -57,8 +57,8 @@ service 'docker' do
 end
 
 # ── 3. Pull the application image from Docker Hub ─────────────────
-execute 'pull_sqrt_image' do
-  command 'docker pull nirshah77/sqrt-app:latest'
+execute 'pull_calc_image' do
+  command 'docker pull nirshah77/mini-calc:latest'
 end
 
 # ── 4. Run the container ──────────────────────────────────────────
@@ -67,9 +67,9 @@ end
 # not_if guard              : idempotent — won't create duplicate containers
 #
 # To test interactively once deployed:
-#   docker exec -it sqrt-app java calc
-execute 'run_sqrt_container' do
-  command 'docker run -d -i --name sqrt-app -p 8080:8080 --restart unless-stopped nirshah77/sqrt-app:latest'
-  not_if 'docker ps -a --format "{{.Names}}" | grep -q "^sqrt-app$"'
+#   docker exec -it mini-calc java calc
+execute 'run_calc_container' do
+  command 'docker run -d -i --name mini-calc -p 8080:8080 --restart unless-stopped nirshah77/mini-calc:latest'
+  not_if 'docker ps -a --format "{{.Names}}" | grep -q "^mini-calc$"'
 end
 

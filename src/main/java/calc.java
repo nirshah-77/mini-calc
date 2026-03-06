@@ -81,4 +81,3 @@ public class calc {
         sc.close();
     }
 }
-

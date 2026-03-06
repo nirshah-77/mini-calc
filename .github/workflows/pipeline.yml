@@ -1,5 +1,5 @@
 name: DevOps Pipeline
-# Flow: Push → Build Java → Docker Hub → Terraform EC2 → Chef via SSH → Container
+# Flow: Push → Build calc.java → Docker Hub → Terraform EC2 → Chef via SSH → Container
 on:
   push:
     branches:
@@ -17,8 +17,9 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - name: Compile
-        run: javac SqrtApp.java
+          cache: maven
+      - name: Run JUnit Tests
+        run: mvn test
       - name: Login to Docker Hub
         uses: docker/login-action@v2
         with:
@@ -29,7 +30,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: nirshah77/sqrt-app:latest
+          tags: nirshah77/mini-calc:latest
 
   # ── JOB 2: Terraform creates the EC2 instance ─────────────────
   terraform-apply:
