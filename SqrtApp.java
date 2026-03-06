@@ -1,12 +1,12 @@
 public class SqrtApp {
     public static void main(String[] args) {
-        double[] testValues = {4.0, 9.0, 16.0, 25.0, 2.0};
+        Scanner sc = new Scanner(System.in);
 
-        // System.out.println("=== Square Root Calculator ===");
-        for (double num : testValues) {
-            double result = Math.sqrt(num);
-            System.out.printf("sqrt(%.1f) = %.4f%n", num, result);
-        }
-        // System.out.println("==============================");
-    }
+        System.out.println("Enter a number:");
+
+        double num = sc.nextDouble();
+
+        double result = Math.sqrt(num);
+
+        System.out.println("Square root: " + result);
 }
