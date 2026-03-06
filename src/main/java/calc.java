@@ -2,8 +2,6 @@ import java.util.Scanner;
 
 public class calc {
 
-    // ── Testable static methods ────────────────────────────────────
-
     public static double sqrt(double n) {
         if (n < 0) throw new IllegalArgumentException("Cannot sqrt negative number: " + n);
         return Math.sqrt(n);
@@ -24,8 +22,6 @@ public class calc {
     public static double power(double base, double exp) {
         return Math.pow(base, exp);
     }
-
-    // ── Interactive menu ───────────────────────────────────────────
 
     public static void main(String[] args) {
         Scanner sc = new Scanner(System.in);
@@ -52,24 +48,20 @@ public class calc {
                         System.out.print("Enter number: ");
                         System.out.printf("Result: %.6f%n", sqrt(sc.nextDouble()));
                         break;
-
                     case 2:
                         System.out.print("Enter non-negative integer: ");
                         System.out.printf("Result: %d%n", factorial(sc.nextInt()));
                         break;
-
                     case 3:
                         System.out.print("Enter number (> 0): ");
                         System.out.printf("Result: %.6f%n", ln(sc.nextDouble()));
                         break;
-
                     case 4:
                         System.out.print("Enter base: ");
                         double base = sc.nextDouble();
                         System.out.print("Enter exponent: ");
                         System.out.printf("Result: %.6f%n", power(base, sc.nextDouble()));
                         break;
-
                     default:
                         System.out.println("Invalid option. Please choose 1-5.");
                 }

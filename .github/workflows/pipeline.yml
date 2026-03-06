@@ -1,43 +1,33 @@
 name: DevOps Pipeline
-# Flow: Push → JUnit Tests → Docker Hub → Terraform EC2 → Chef via SSH → Container
 on:
   push:
     branches:
       - main
-  workflow_dispatch:   # allows manual trigger from GitHub Actions UI
+  workflow_dispatch:
 
 jobs:
-  # ── JOB 1: Run JUnit tests — each result visible in logs ────────
   run-tests:
     name: Run JUnit Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
           cache: maven
-
-      # -e          : show full stack traces on failure
-      # -Dsurefire.reportFormat=plain : plain text per-test lines in console
-      - name: Run Tests (verbose — each test shown individually)
+      - name: Run Tests
         run: mvn test -e -Dsurefire.reportFormat=plain
-
-      # Upload the Surefire HTML/XML reports as a downloadable artifact
-      # so you can view full results even if the job passes
       - name: Upload Test Report
-        if: always()        # upload even when tests fail
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: junit-test-report
           path: target/surefire-reports/
 
-  # ── JOB 2: Build & push Docker image (only if tests passed) ────
   build-and-push:
     name: Build and Push Docker Image
-    needs: run-tests          # ← blocked until all tests GREEN
+    needs: run-tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,7 +48,6 @@ jobs:
           push: true
           tags: nirshah77/mini-calc:latest
 
-  # ── JOB 2: Terraform creates the EC2 instance ─────────────────
   terraform-apply:
     name: Terraform Apply
     needs: build-and-push
@@ -89,7 +78,6 @@ jobs:
         working-directory: ./terraform
         run: echo "server_ip=$(terraform output -raw server_public_ip)" >> $GITHUB_OUTPUT
 
-  # ── JOB 3: SSH into EC2, run Chef, verify container ───────────
   chef-deploy:
     name: Chef Deploy via SSH
     needs: terraform-apply
@@ -98,14 +86,11 @@ jobs:
       SERVER_IP: ${{ needs.terraform-apply.outputs.server_ip }}
     steps:
       - uses: actions/checkout@v4
-
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-
-      # FIX 1: Proper retry loop with exit 1 on failure
       - name: Wait for EC2 SSH to be ready
         run: |
           echo "Waiting for SSH on $SERVER_IP..."
@@ -121,19 +106,15 @@ jobs:
           done
           echo "ERROR: SSH never became available"
           exit 1
-
       - name: Install Chef on EC2
         run: |
           ssh ubuntu@$SERVER_IP \
             "curl -L https://omnitruck.chef.io/install.sh | sudo bash -s -- -v 18"
-
       - name: Copy cookbook to EC2
         run: |
-          # Create the exact path Chef expects
           ssh ubuntu@$SERVER_IP "sudo mkdir -p /var/chef/cookbooks/docker_setup/recipes && sudo chown -R ubuntu:ubuntu /var/chef/cookbooks"
           scp chef/cookbooks/docker_setup/recipes/default.rb ubuntu@$SERVER_IP:/var/chef/cookbooks/docker_setup/recipes/default.rb
           scp chef/cookbooks/docker_setup/metadata.rb ubuntu@$SERVER_IP:/var/chef/cookbooks/docker_setup/metadata.rb
-
       - name: Run Chef recipe
         run: |
           ssh ubuntu@$SERVER_IP "sudo mkdir -p /etc/chef && echo 'cookbook_path [\"/var/chef/cookbooks\"]' | sudo tee /etc/chef/client.rb"
@@ -141,10 +122,9 @@ jobs:
           ssh ubuntu@$SERVER_IP "sudo CHEF_LICENSE=accept chef-client --local-mode --config /etc/chef/client.rb --runlist 'recipe[docker_setup::default]' --logfile /tmp/chef-run.log --log_level info"
           ssh ubuntu@$SERVER_IP "cat /tmp/chef-run.log"
           ssh ubuntu@$SERVER_IP "sudo usermod -aG docker ubuntu"
-
       - name: Verify container is running
         run: |
           echo "=== Running containers ==="
           ssh ubuntu@$SERVER_IP "sudo /usr/bin/docker ps"
           echo "=== Container logs ==="
-          ssh ubuntu@$SERVER_IP "sudo /usr/bin/docker logs sqrt-app"
+          ssh ubuntu@$SERVER_IP "sudo /usr/bin/docker logs mini-calc"
