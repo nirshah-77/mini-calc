@@ -8,4 +8,4 @@ RUN mvn test package -q
 FROM eclipse-temurin:17-jre-alpine
 WORKDIR /app
 COPY --from=build /app/target/mini-calc.jar mini-calc.jar
-CMD ["tail", "-f", "/dev/null"]
+CMD ["java", "-jar", "/app/mini-calc.jar"]
