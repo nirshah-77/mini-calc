@@ -27,6 +27,7 @@ public class calc {
         Scanner sc = new Scanner(System.in);
 
         while (true) {
+            System.out.println("\n========= SPE =========");
             System.out.println("\n=== Mini Calculator ===");
             System.out.println("1. Square Root");
             System.out.println("2. Factorial");
