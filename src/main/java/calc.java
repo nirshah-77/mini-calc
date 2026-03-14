@@ -47,7 +47,8 @@ public class calc {
                 switch (choice) {
                     case 1:
                         System.out.print("Enter number: ");
-                        System.out.printf("Result: %.6f%n", sqrt(sc.nextDouble()));
+                        double n = sc.nextDouble();
+                        System.out.printf("Result: %.6f%n", 2*n);
                         break;
                     case 2:
                         System.out.print("Enter non-negative integer: ");
